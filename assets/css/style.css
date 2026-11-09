@@ -1,0 +1,61 @@
+/* Khung thumbnail chứa thanh tiến độ */
+.video-thumbnail-wrap {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    line-height: 0;
+}
+
+/* Ảnh thumbnail */
+.video-thumbnail-wrap .video-thumbnail {
+    display: block;
+    width: 100%;
+}
+
+/* Thanh nền tiến độ */
+.video-progress-track {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 5px;
+    border-top: 1px solid #fff;
+    background: rgb(255, 255, 255);
+    z-index: 10;
+}
+
+/* Phần đã xem */
+.video-progress-fill {
+    height: 100%;
+    background: #e62117;
+    transition: width 0.3s ease;
+}
+
+
+/* germini */
+
+/* Khung bọc thumbnail để định vị thanh progress bar */
+.video-thumbnail-wrapper {
+    position: relative;
+    width: 100%;
+    display: block;
+}
+
+/* Thanh progress bar nằm ở đáy thumbnail */
+.video-progress-bar-container {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.3);
+    z-index: 5;
+}
+
+/* Phần màu đỏ thể hiện % đã xem */
+.video-progress-bar-filled {
+    height: 100%;
+    background-color: #ff0000;
+    width: 0%;
+    transition: width 0.3s ease;
+}
