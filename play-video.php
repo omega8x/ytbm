@@ -3,17 +3,29 @@ require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/func/common-functions.php';
 require_once __DIR__ . '/func/youtube-functions.php';
 require_once __DIR__ . '/func/progress-functions.php';
-
+require_once __DIR__ . '/func/playlist-functions.php';
 // --------------------------------------------------
 // 1. Lấy tham số video và kênh
 // --------------------------------------------------
 $videoId = trim($_GET['video_id'] ?? '');
 $channelId = trim($_GET['channel_id'] ?? '');
 
+// Playlist ID (có thể không có nếu mở video từ danh sách kênh)
+$playlistId = trim($_GET['playlist_id'] ?? '');
+
+// Kiểm tra định dạng Playlist ID nếu có
+if (
+    $playlistId !== '' &&
+    !preg_match('/^[A-Za-z0-9_-]{10,100}$/', $playlistId)
+) {
+    http_response_code(400);
+    exit('Playlist ID không hợp lệ.');
+}
 if (!preg_match('/^[a-zA-Z0-9_-]{11}$/', $videoId)) {
     http_response_code(400);
     exit('Video ID không hợp lệ.');
 }
+
 
 if ($channelId === '') {
     http_response_code(400);
@@ -103,40 +115,110 @@ $positionSeconds = min($positionSeconds, max(0, $durationSeconds));
 // --------------------------------------------------
 // 4. Lấy danh sách video cùng kênh
 // --------------------------------------------------
+
+// --------------------------------------------------
+// 4. Lấy danh sách video hiển thị bên phải
+//
+// - Nếu có playlist_id: lấy video trong Playlist.
+// - Nếu không có: lấy video cùng kênh như trước.
+// --------------------------------------------------
+
 $relatedVideos = [];
 
+$relatedProgressMap = [];
+
+$playlistNextPageToken = '';
+
+$playlistHasMore = false;
+
 try {
-    $playlistResponse = getChannelVideos(
-        $channel['uploads_playlist_id'],
-        '',
-        10
+
+    if ($playlistId !== '') {
+
+        // ------------------------------------------
+        // TRƯỜNG HỢP 1: MỞ VIDEO TỪ PLAYLIST
+        // ------------------------------------------
+
+        $playlistResponse = getPlaylistVideos(
+            $playlistId,
+            '',
+            12
+        );
+
+        $relatedVideos = formatVideos(
+            $playlistResponse['items'] ?? []
+        );
+
+        // Lưu token để sử dụng khi tải trang tiếp theo
+        $playlistNextPageToken =
+            $playlistResponse['nextPageToken'] ?? '';
+
+        $playlistHasMore =
+            !empty($playlistNextPageToken);
+
+    } else {
+
+        // ------------------------------------------
+        // TRƯỜNG HỢP 2: MỞ VIDEO TỪ DANH SÁCH KÊNH
+        // Giữ nguyên chức năng cũ
+        // ------------------------------------------
+
+        $playlistResponse = getChannelVideos(
+            $channel['uploads_playlist_id'],
+            '',
+            10
+        );
+
+        $relatedVideos = formatVideos(
+            $playlistResponse['items'] ?? []
+        );
+
+    }
+
+    // Nếu mở từ Playlist: giữ lại video đang phát để đánh dấu.
+    // Nếu mở từ danh sách kênh: loại video đang phát như trước.
+    if ($playlistId === '') {
+
+        $relatedVideos = array_values(array_filter(
+            $relatedVideos,
+            fn($item) => ($item['video_id'] ?? '') !== $videoId
+        ));
+
+    }
+
+    // Lấy tiến độ xem của các video
+    $relatedProgressMap = getVideoProgressMap(
+        $conn,
+        $relatedVideos
     );
 
-    $relatedVideos = formatVideos($playlistResponse['items'] ?? []);
-
-    // Loại video đang phát khỏi danh sách bên phải
-    $relatedVideos = array_values(array_filter(
-        $relatedVideos,
-        fn($item) => ($item['video_id'] ?? '') !== $videoId
-    ));
-
-    $relatedProgressMap = getVideoProgressMap($conn, $relatedVideos);
-
 } catch (Throwable $e) {
+
     error_log('Related videos error: ' . $e->getMessage());
+
 }
+
 
 // --------------------------------------------------
 // 5. Cấu hình truyền sang JavaScript
 // --------------------------------------------------
 $playerConfig = [
-    'videoId'        => $videoId,
-    'channelId'      => $channel['channel_id'],
-    'position'       => $positionSeconds,
-    'duration'       => $durationSeconds,
-    'isCompleted'    => $isCompleted,
-    'saveUrl'        => 'ajax/save-video-progress.php'
+    'videoId' => $videoId,
+    'channelId' => $channel['channel_id'],
+
+    // Thông tin Playlist
+    'playlistId' => $playlistId,
+    'playlistNextPageToken' => $playlistNextPageToken,
+    'playlistHasMore' => $playlistHasMore,
+
+    // Tiến độ xem
+    'position' => $positionSeconds,
+    'duration' => $durationSeconds,
+    'isCompleted' => $isCompleted,
+
+    'saveUrl' => 'ajax/save-video-progress.php'
 ];
+
 ?>
 <!DOCTYPE html>
 <html lang="vi">
@@ -207,6 +289,26 @@ $playerConfig = [
         min-width: 0;
     }
 
+    /* Video đang phát trong Playlist */
+    .related-item.active {
+        background: #e7f1ff;
+        border: 1px solid #86b7fe;
+    }
+
+    .related-item.active .related-title {
+        color: #0d6efd;
+        font-weight: 600;
+    }
+
+    /* Nhãn đang phát */
+    .playing-label {
+        display: inline-block;
+        font-size: 11px;
+        color: #0d6efd;
+        font-weight: 600;
+        margin-top: 5px;
+    }
+
     .related-item:hover {
         background: #e9ecef;
     }
@@ -248,13 +350,7 @@ $playerConfig = [
             Trang chủ
         </a>
 
-        <!-- Thông báo lưu tiến độ -->
-        <span id="saveNotification"
-            class="small text-success ms-auto"
-            style="display:none;">
-            <i class="bi bi-check-circle-fill"></i>
-            Time view saved
-        </span>
+
 
     </div>
 
@@ -277,11 +373,17 @@ $playerConfig = [
 
             <div id="progressMessage" class="small text-success mb-2">
                 <?php if ($positionSeconds > 0): ?>
-                    Tiếp tục xem từ <?= gmdate('H:i:s', $positionSeconds) ?>.
+                    Tiếp tục xem từ <?= gmdate('H:i:s', $positionSeconds) ?> &nbsp; &nbsp; &nbsp;
+
+                <!-- Thông báo lưu tiến độ -->
+                <span id="saveNotification" class="small text-success ms-auto" style="display:none;"><i class="bi bi-check-circle-fill"></i>Time view saved</span>    
+
                 <?php elseif ($isCompleted): ?>
                     Video đã xem hoàn thành. Phát lại từ đầu.
                 <?php endif; ?>
             </div>
+
+
 
             <div class="card">
                 <div class="card-body">
@@ -296,44 +398,82 @@ $playerConfig = [
         <div>
             <div class="card">
                 <div class="card-header fw-semibold">
-                    Video khác của <?= h($channel['channel_title']) ?>
+                    <?php if ($playlistId !== ''): ?>
+                        <i class="bi bi-collection-play me-1"></i>
+                        Video trong Playlist
+                    <?php else: ?>
+                        Video khác của <?= h($channel['channel_title']) ?>
+                    <?php endif; ?>
                 </div>
 
                 <div class="card-body p-2">
-                    <?php foreach ($relatedVideos as $item): ?>
-                        <a class="related-item"
-                           href="play-video.php?video_id=<?= urlencode($item['video_id']) ?>&channel_id=<?= urlencode($channel['channel_id']) ?>">
 
-<div class="video-thumbnail-wrap"
-     style="width:130px; flex-shrink:0;">
+                <?php foreach ($relatedVideos as $item): ?>
 
-    <img
-        src="<?= h($item['thumbnail']) ?>"
-        alt=""
-        loading="lazy"
-        style="width:130px; height:74px; object-fit:cover;"
-    >
+                    <?php
+                    $isCurrentVideo = ($item['video_id'] === $videoId);
+                    $progress = $relatedProgressMap[$item['video_id']] ?? null;
 
-    <?php
-    $progress = $relatedProgressMap[$item['video_id']] ?? null;
-    ?>
+                    // URL video
+                    $itemUrl = 'play-video.php?video_id=' .
+                        urlencode($item['video_id']) .
+                        '&channel_id=' .
+                        urlencode($channel['channel_id']);
 
-    <?php if ($progress && $progress['percent'] > 0): ?>
-        <div class="video-progress-track">
-            <div
-                class="video-progress-fill"
-                style="width: <?= $progress['percent'] ?>%;"
-            ></div>
-        </div>
-    <?php endif; ?>
+                    // Giữ ngữ cảnh Playlist khi chuyển video
+                    if ($playlistId !== '') {
+                        $itemUrl .= '&playlist_id=' . urlencode($playlistId);
+                    }
+                    ?>
 
-</div>
+                    <a
+                        class="related-item <?= $isCurrentVideo && $playlistId !== '' ? 'active' : '' ?>"
+                        href="<?= h($itemUrl) ?>"
+                        <?= $isCurrentVideo ? 'aria-current="true"' : '' ?>
+                    >
 
-                            <div class="related-title">
-                                <?= h($item['title']) ?>
-                            </div>
-                        </a>
-                    <?php endforeach; ?>
+                        <div class="video-thumbnail-wrap"
+                            style="width:130px; flex-shrink:0;">
+
+                            <img
+                                src="<?= h($item['thumbnail']) ?>"
+                                alt=""
+                                loading="lazy"
+                                style="width:130px; height:74px; object-fit:cover;"
+                            >
+
+                            <?php if ($progress && $progress['percent'] > 0): ?>
+
+                                <div class="video-progress-track">
+                                    <div
+                                        class="video-progress-fill"
+                                        style="width: <?= $progress['percent'] ?>%;"
+                                    ></div>
+                                </div>
+
+                            <?php endif; ?>
+
+                        </div>
+
+                        <div class="related-title">
+
+                            <?= h($item['title']) ?>
+
+                            <?php if ($isCurrentVideo && $playlistId !== ''): ?>
+
+                                <div class="playing-label">
+                                    <i class="bi bi-play-circle-fill"></i>
+                                    Đang phát
+                                </div>
+
+                            <?php endif; ?>
+
+                        </div>
+
+                    </a>
+
+                <?php endforeach; ?>
+
 
                     <?php if (!$relatedVideos): ?>
                         <div class="text-muted small p-2">
