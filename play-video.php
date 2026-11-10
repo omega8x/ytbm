@@ -203,20 +203,25 @@ try {
 // 5. Cấu hình truyền sang JavaScript
 // --------------------------------------------------
 $playerConfig = [
+    // Thông tin video hiện tại
     'videoId' => $videoId,
     'channelId' => $channel['channel_id'],
-
-    // Thông tin Playlist
-    'playlistId' => $playlistId,
-    'playlistNextPageToken' => $playlistNextPageToken,
-    'playlistHasMore' => $playlistHasMore,
 
     // Tiến độ xem
     'position' => $positionSeconds,
     'duration' => $durationSeconds,
     'isCompleted' => $isCompleted,
 
-    'saveUrl' => 'ajax/save-video-progress.php'
+    // Lưu tiến độ
+    'saveUrl' => 'ajax/save-video-progress.php',
+
+    // Thông tin Playlist
+    'playlistId' => $playlistId,
+    'playlistNextPageToken' => $playlistNextPageToken,
+    'playlistHasMore' => $playlistHasMore,
+
+    // AJAX tải video Playlist
+    'playlistVideosUrl' => 'ajax/load-playlist-videos.php'
 ];
 
 ?>
